@@ -164,7 +164,7 @@ function evaluateConsensus(
 const MODE_LABELS: Record<AnalysisMode, { macro: string; setup: string; trigger: string }> = {
   swing: { macro: '1W', setup: '1D', trigger: '4H' },
   intraday: { macro: '4H', setup: '1H', trigger: '15M' },
-  antivitalik: { macro: '1D', setup: '4H', trigger: '1H' },
+  
 };
 
 export function getModeLabels(mode: AnalysisMode) {
