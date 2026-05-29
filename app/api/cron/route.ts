@@ -24,11 +24,13 @@ export const maxDuration = 60;
 const TF_CONFIG: Record<AnalysisMode, { trigger: string; setup: string; macro: string }> = {
   swing: { trigger: '4h', setup: '1d', macro: '1w' },
   intraday: { trigger: '15m', setup: '1h', macro: '4h' },
+  antivitalik: { trigger: '1h', setup: '4h', macro: '1d' },
 };
 
 const COOLDOWN_BY_MODE: Record<AnalysisMode, number> = {
   swing: 240,
   intraday: 30,
+  antivitalik: 720, // 12 horas
 };
 
 export async function GET(req: NextRequest) {
@@ -68,8 +70,7 @@ export async function GET(req: NextRequest) {
   const scanReport: any[] = [];
 
   for (const entry of enabled) {
-    const modes: AnalysisMode[] = (entry as any).modes || ['swing', 'intraday'];
-
+    const modes: AnalysisMode[] = (entry as any).modes || ['swing', 'intraday', 'antivitalik'];
     for (const mode of modes) {
       const tfs = TF_CONFIG[mode];
 
