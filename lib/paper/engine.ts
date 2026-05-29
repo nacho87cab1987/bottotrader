@@ -122,21 +122,38 @@ export function createPaperTrade(
   let stopLoss: number;
   let takeProfit: number;
 
-  if (side === 'long') {
-    stopLoss = result.levels.nearestSupport!.price;
-    if (result.levels.resistances.length > 0) {
-      takeProfit = result.levels.resistances[0].price;
-    } else {
+  // En modo intraday: R:R fijo 1:1.5 calculado desde el stop
+  // En modo swing: usa niveles S/R como antes
+  if (result.mode === 'intraday') {
+    // Stop a 1% del entry (mas estable que S/R detectado para 15m)
+    const stopDistancePct = 0.01;
+    if (side === 'long') {
+      stopLoss = entryPrice * (1 - stopDistancePct);
       const risk = entryPrice - stopLoss;
-      takeProfit = entryPrice + (risk * 2);
+      takeProfit = entryPrice + (risk * 1.5);
+    } else {
+      stopLoss = entryPrice * (1 + stopDistancePct);
+      const risk = stopLoss - entryPrice;
+      takeProfit = entryPrice - (risk * 1.5);
     }
   } else {
-    stopLoss = result.levels.nearestResistance!.price;
-    if (result.levels.supports.length > 0) {
-      takeProfit = result.levels.supports[0].price;
+    // Swing: usa niveles S/R detectados (funciona bien)
+    if (side === 'long') {
+      stopLoss = result.levels.nearestSupport!.price;
+      if (result.levels.resistances.length > 0) {
+        takeProfit = result.levels.resistances[0].price;
+      } else {
+        const risk = entryPrice - stopLoss;
+        takeProfit = entryPrice + (risk * 2);
+      }
     } else {
-      const risk = stopLoss - entryPrice;
-      takeProfit = entryPrice - (risk * 2);
+      stopLoss = result.levels.nearestResistance!.price;
+      if (result.levels.supports.length > 0) {
+        takeProfit = result.levels.supports[0].price;
+      } else {
+        const risk = stopLoss - entryPrice;
+        takeProfit = entryPrice - (risk * 2);
+      }
     }
   }
 
