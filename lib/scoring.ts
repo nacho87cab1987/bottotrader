@@ -2,7 +2,7 @@ import { Kline } from './binance';
 import { analyzeTimeframe, TimeframeAnalysis, TimeframeBias } from './timeframe';
 import { detectSupportResistance, calculateFibonacci, SRLevel, FibLevel } from './levels';
 
-export type AnalysisMode = 'swing' | 'intraday' | 'antivitalik';
+export type AnalysisMode = 'swing' | 'intraday';
 export type Signal = {
   id: string;
   name: string;
