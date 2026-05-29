@@ -1,7 +1,3 @@
-// API del paper trader.
-// GET: devuelve estado completo (account, trades, stats, config)
-// POST: acciones (reset, close manual, update config)
-
 import { NextRequest, NextResponse } from 'next/server';
 import {
   getPaperAccount, savePaperAccount,
@@ -11,7 +7,6 @@ import {
 } from '../../../lib/paper/store';
 import {
   closePaperTrade, updateAccountAfterClose,
-  DEFAULT_PAPER_CONFIG,
 } from '../../../lib/paper/engine';
 import { calculateStats } from '../../../lib/paper/stats';
 
@@ -29,7 +24,6 @@ export async function GET() {
   const closedTrades = trades.filter(t => t.status === 'closed');
   const stats = calculateStats(trades);
 
-  // Actualizamos open count en account
   const accountWithOpenCount = { ...account, openTrades: openTrades.length };
 
   return NextResponse.json({
