@@ -8,12 +8,12 @@ import {
   getPaperTrades, savePaperTrades,
   getPaperConfig, savePaperConfig,
   resetPaperAccount,
-} from '@/lib/paper/store';
+} from '../../../lib/paper/store';
 import {
   closePaperTrade, updateAccountAfterClose,
   DEFAULT_PAPER_CONFIG,
-} from '@/lib/paper/engine';
-import { calculateStats } from '@/lib/paper/stats';
+} from '../../../lib/paper/engine';
+import { calculateStats } from '../../../lib/paper/stats';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
