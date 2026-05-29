@@ -1,5 +1,3 @@
-// Motor de paper trading. Maneja apertura, gestion y cierre de posiciones simuladas.
-
 import type { AnalysisResult, AnalysisMode } from '../scoring';
 
 export type PaperTrade = {
@@ -16,7 +14,9 @@ export type PaperTrade = {
 
   stopLoss: number;
   takeProfit: number;
-  positionSize: number;
+  positionSize: number;  // notional total (margin * leverage)
+  marginUsed: number;     // margen real bloqueado
+  leverage: number;       // 1 (sin apalancamiento), 5 (antivitalik), etc
   riskAmount: number;
 
   exitPrice?: number;
@@ -53,7 +53,7 @@ export type PaperConfig = {
   feeRate: number;
   slippage: number;
   maxOpenPositionsPerMode: number;
-  maxHoldHours: { swing: number; intraday: number };
+  maxHoldHours: { swing: number; intraday: number; antivitalik: number };
 };
 
 export const DEFAULT_PAPER_CONFIG: PaperConfig = {
@@ -65,8 +65,36 @@ export const DEFAULT_PAPER_CONFIG: PaperConfig = {
   maxHoldHours: {
     swing: 168,
     intraday: 24,
+    antivitalik: 48,
   },
 };
+
+// Configuracion por modo: leverage y reglas de SL/TP
+function getModeConfig(mode: AnalysisMode) {
+  if (mode === 'antivitalik') {
+    return {
+      leverage: 5,
+      slPricePct: 0.06,  // 6% del precio
+      tpPricePct: 0.04,  // 4% del precio
+      maxOpenInMode: 3,
+    };
+  }
+  if (mode === 'intraday') {
+    return {
+      leverage: 1,
+      slPricePct: 0.01,
+      tpPricePct: 0.015,  // R:R 1:1.5
+      maxOpenInMode: 5,
+    };
+  }
+  // swing: usa niveles S/R (no fijos)
+  return {
+    leverage: 1,
+    slPricePct: null,
+    tpPricePct: null,
+    maxOpenInMode: 5,
+  };
+}
 
 export function shouldOpenPosition(
   result: AnalysisResult,
@@ -74,13 +102,47 @@ export function shouldOpenPosition(
   config: PaperConfig
 ): { open: boolean; reason: string } {
   if (result.verdict !== 'long' && result.verdict !== 'short') {
-    return { open: false, reason: `verdict ${result.verdict}, no setup valido` };
+    return { open: false, reason: `verdict ${result.verdict}` };
   }
 
-  if (result.consensus.level !== 'A+' && result.consensus.level !== 'A') {
-    return { open: false, reason: `consenso ${result.consensus.level} insuficiente` };
+  const modeConf = getModeConfig(result.mode);
+
+  // ─── REGLAS ESPECIFICAS DE ANTIVITALIK ───
+  if (result.mode === 'antivitalik') {
+    // Solo consenso A+ (no A normal)
+    if (result.consensus.level !== 'A+') {
+      return { open: false, reason: `antivitalik requiere A+, tiene ${result.consensus.level}` };
+    }
+
+    // Fear & Greed en extremos
+    const fg = result.context.fearGreed;
+    if (fg === null) {
+      return { open: false, reason: 'antivitalik requiere F&G y no esta disponible' };
+    }
+    if (result.verdict === 'long' && fg >= 25) {
+      return { open: false, reason: `long antivitalik requiere F&G<25, tiene ${fg}` };
+    }
+    if (result.verdict === 'short' && fg <= 75) {
+      return { open: false, reason: `short antivitalik requiere F&G>75, tiene ${fg}` };
+    }
+
+    // Cooldown 12h entre trades del mismo par en antivitalik
+    const recentSamePair = openTrades.filter(t =>
+      t.symbol === result.symbol && t.mode === 'antivitalik'
+    );
+    // Tambien deberiamos chequear trades cerrados recientes pero eso lo
+    // hacemos en el cron usando alert history o creamos otro mecanismo
+    if (recentSamePair.length > 0) {
+      return { open: false, reason: 'ya hay posicion antivitalik en este par' };
+    }
+  } else {
+    // Modos no-antivitalik: A+ o A
+    if (result.consensus.level !== 'A+' && result.consensus.level !== 'A') {
+      return { open: false, reason: `consenso ${result.consensus.level} insuficiente` };
+    }
   }
 
+  // ─── REGLAS COMUNES A TODOS LOS MODOS ───
   const duplicate = openTrades.find(t =>
     t.symbol === result.symbol &&
     t.mode === result.mode &&
@@ -88,19 +150,22 @@ export function shouldOpenPosition(
     t.status === 'open'
   );
   if (duplicate) {
-    return { open: false, reason: 'posicion abierta para este simbolo+modo+side' };
+    return { open: false, reason: 'posicion duplicada' };
   }
 
   const sameModeOpen = openTrades.filter(t => t.mode === result.mode && t.status === 'open').length;
-  if (sameModeOpen >= config.maxOpenPositionsPerMode) {
-    return { open: false, reason: `limite de ${config.maxOpenPositionsPerMode} posiciones en modo ${result.mode}` };
+  if (sameModeOpen >= modeConf.maxOpenInMode) {
+    return { open: false, reason: `limite de ${modeConf.maxOpenInMode} posiciones en modo ${result.mode}` };
   }
 
-  if (result.verdict === 'long' && !result.levels?.nearestSupport) {
-    return { open: false, reason: 'sin soporte detectado para stop' };
-  }
-  if (result.verdict === 'short' && !result.levels?.nearestResistance) {
-    return { open: false, reason: 'sin resistencia detectada para stop' };
+  // Para swing necesitamos niveles S/R. Para otros modos usamos % fijo
+  if (result.mode === 'swing') {
+    if (result.verdict === 'long' && !result.levels?.nearestSupport) {
+      return { open: false, reason: 'sin soporte detectado para stop' };
+    }
+    if (result.verdict === 'short' && !result.levels?.nearestResistance) {
+      return { open: false, reason: 'sin resistencia detectada para stop' };
+    }
   }
 
   return { open: true, reason: 'setup valido' };
@@ -114,6 +179,9 @@ export function createPaperTrade(
   if (result.verdict !== 'long' && result.verdict !== 'short') return null;
 
   const side = result.verdict;
+  const modeConf = getModeConfig(result.mode);
+  const leverage = modeConf.leverage;
+
   const entryPriceRaw = result.price;
   const entryPrice = side === 'long'
     ? entryPriceRaw * (1 + config.slippage)
@@ -122,22 +190,18 @@ export function createPaperTrade(
   let stopLoss: number;
   let takeProfit: number;
 
-  // En modo intraday: R:R fijo 1:1.5 calculado desde el stop
-  // En modo swing: usa niveles S/R como antes
-  if (result.mode === 'intraday') {
-    // Stop a 1% del entry (mas estable que S/R detectado para 15m)
-    const stopDistancePct = 0.01;
+  // Calcular SL y TP segun modo
+  if (modeConf.slPricePct !== null && modeConf.tpPricePct !== null) {
+    // Modo con stops/targets en % fijos (antivitalik, intraday)
     if (side === 'long') {
-      stopLoss = entryPrice * (1 - stopDistancePct);
-      const risk = entryPrice - stopLoss;
-      takeProfit = entryPrice + (risk * 1.5);
+      stopLoss = entryPrice * (1 - modeConf.slPricePct);
+      takeProfit = entryPrice * (1 + modeConf.tpPricePct);
     } else {
-      stopLoss = entryPrice * (1 + stopDistancePct);
-      const risk = stopLoss - entryPrice;
-      takeProfit = entryPrice - (risk * 1.5);
+      stopLoss = entryPrice * (1 + modeConf.slPricePct);
+      takeProfit = entryPrice * (1 - modeConf.tpPricePct);
     }
   } else {
-    // Swing: usa niveles S/R detectados (funciona bien)
+    // Swing: usa niveles S/R detectados
     if (side === 'long') {
       stopLoss = result.levels.nearestSupport!.price;
       if (result.levels.resistances.length > 0) {
@@ -160,13 +224,18 @@ export function createPaperTrade(
   if (side === 'long' && (stopLoss >= entryPrice || takeProfit <= entryPrice)) return null;
   if (side === 'short' && (stopLoss <= entryPrice || takeProfit >= entryPrice)) return null;
 
+  // Risk amount fijo segun config
   const riskAmount = account.balance * config.riskPerTrade;
   const stopDistance = Math.abs(entryPrice - stopLoss);
   const stopDistancePct = stopDistance / entryPrice;
-  const positionSize = riskAmount / stopDistancePct;
 
-  if (positionSize > account.balance * 5) {
-    return null;
+  // Notional calculado para que SI el stop salta perdamos riskAmount
+  const positionSize = riskAmount / stopDistancePct;
+  const marginUsed = positionSize / leverage;
+
+  // El margen usado no puede superar el balance disponible
+  if (marginUsed > account.balance * 0.8) {
+    return null; // protegemos contra usar mas del 80% del balance en un trade
   }
 
   return {
@@ -182,6 +251,8 @@ export function createPaperTrade(
     stopLoss,
     takeProfit,
     positionSize,
+    marginUsed,
+    leverage,
     riskAmount,
     snapshot: {
       rsi: result.indicators.rsi,
@@ -233,13 +304,15 @@ export function closePaperTrade(
     ? (exitPrice - trade.entryPrice) * units
     : (trade.entryPrice - exitPrice) * units;
 
+  // Fees calculadas sobre el notional (no sobre el margen). Asi opera BingX real
   const entryFee = trade.positionSize * config.feeRate;
   const exitNotional = exitPrice * units;
   const exitFee = exitNotional * config.feeRate;
   const totalFees = entryFee + exitFee;
 
   const netPnl = grossPnl - totalFees;
-  const pnlPercent = (netPnl / trade.positionSize) * 100;
+  // pnlPercent sobre el margen usado, no sobre notional
+  const pnlPercent = (netPnl / trade.marginUsed) * 100;
 
   return {
     ...trade,
