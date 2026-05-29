@@ -158,6 +158,17 @@ export async function GET(req: NextRequest) {
           continue;
         }
 
+        // Solo alertar consensos A+ (filtro de calidad alta)
+        if (result.consensus.level !== 'A+') {
+          scanReport.push({
+            symbol: entry.symbol,
+            mode,
+            status: 'below-consensus',
+            consensus: result.consensus.level,
+          });
+          continue;
+        }
+
         if (!notifyConfig.whatsapp && !notifyConfig.telegram) {
           scanReport.push({ symbol: entry.symbol, mode, status: 'no-channels' });
           continue;
