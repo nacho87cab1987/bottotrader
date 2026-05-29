@@ -1,7 +1,3 @@
-// Persistencia del paper trader.
-// Reutiliza el sistema de storage que ya tenes en /lib/storage/store.ts
-// Asi todo va a la misma DB (Upstash/KV o filesystem)
-
 import { readJson, writeJson } from '../storage/store';
 import type { PaperTrade, PaperAccount, PaperConfig } from './engine';
 import { DEFAULT_PAPER_CONFIG, createInitialAccount } from './engine';
