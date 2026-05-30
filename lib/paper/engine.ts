@@ -48,7 +48,7 @@ export type PaperConfig = {
   feeRate: number;
   slippage: number;
   maxOpenPositionsPerMode: number;
-  maxHoldHours: { swing: number; intraday: number };
+  maxHoldHours: { swing: number; intraday: number; antivitalik: number };
 };
 
 export const DEFAULT_PAPER_CONFIG: PaperConfig = {
@@ -57,7 +57,7 @@ export const DEFAULT_PAPER_CONFIG: PaperConfig = {
   feeRate: 0.0006,
   slippage: 0.0005,
   maxOpenPositionsPerMode: 5,
-  maxHoldHours: { swing: 168, intraday: 24 },
+  maxHoldHours: { swing: 168, intraday: 24, antivitalik: 720 },
 };
 
 export function shouldOpenPosition(
