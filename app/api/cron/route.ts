@@ -75,7 +75,7 @@ export async function GET(req: NextRequest) {
   const scanReport: any[] = [];
 
   for (const entry of enabled) {
-    const modes: AnalysisMode[] = (entry as any).modes || ['swing', 'intraday'];
+    const modes: AnalysisMode[] = (entry as any).modes || ['swing', 'intraday', 'antivitalik'];
     for (const mode of modes) {
       const tfs = TF_CONFIG[mode];
 
