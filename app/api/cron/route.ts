@@ -16,6 +16,11 @@ import {
   shouldOpenPosition, createPaperTrade,
   evaluateOpenTrade, closePaperTrade, updateAccountAfterClose,
 } from '@/lib/paper/engine';
+import {
+  detectAntivitalikSetup, calculateBalaSize, calculateCompoundPnl,
+  decideAddBalas, shouldCloseCompound, getLastAddTime,
+  ANTIVITALIK_CONFIG,
+} from '@/lib/paper/antivitalik';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -96,7 +101,159 @@ export async function GET(req: NextRequest) {
           longShortRatio: longShort,
           btcDominance: global?.btcDominance ?? null,
         }, mode);
+// ─── ANTIVITALIK: lógica especial (solo cuando mode es antivitalik) ───
+        if (mode === 'antivitalik') {
+          // 1. Evaluar trades abiertos del par para este modo
+          const openForPair = paperTrades.filter(t =>
+            t.mode === 'antivitalik' && t.symbol === entry.symbol && t.status === 'open'
+          );
 
+          if (openForPair.length > 0) {
+            // Hay trades abiertos: chequear si cerrar todo o agregar balas
+            const compound = calculateCompoundPnl(paperTrades, result.price);
+            const closeCheck = shouldCloseCompound(compound.pnlPctLeveraged);
+
+            if (closeCheck.close) {
+              // Cerrar TODOS los trades antivitalik abiertos de este par
+              for (const trade of openForPair) {
+                const closed = closePaperTrade(trade, result.price, closeCheck.reason, paperConfig);
+                const idx = paperTrades.findIndex(t => t.id === trade.id);
+                if (idx !== -1) paperTrades[idx] = closed;
+                paperAccount = updateAccountAfterClose(paperAccount, closed);
+                paperEvents.push({
+                  action: 'closed_antivitalik',
+                  symbol: trade.symbol,
+                  reason: closeCheck.reason,
+                  pnl: closed.pnl,
+                  pnlPctLeveraged: compound.pnlPctLeveraged,
+                });
+              }
+              scanReport.push({
+                symbol: entry.symbol,
+                mode,
+                status: 'antivitalik_closed',
+                reason: closeCheck.reason,
+                pnlPct: compound.pnlPctLeveraged,
+              });
+            } else {
+              // No cierra: chequear si agregar balas
+              const lastAdd = getLastAddTime(paperTrades, entry.symbol);
+              const addDecision = decideAddBalas(compound.pnlPctLeveraged, lastAdd);
+
+              if (addDecision.add && addDecision.balas > 0) {
+                const balaSize = calculateBalaSize(paperAccount.balance);
+                const balasMarginTotal = balaSize * addDecision.balas;
+                const balasNotional = balasMarginTotal * ANTIVITALIK_CONFIG.leverage;
+
+                // Slippage adverso
+                const entryPrice = result.price * (1 - paperConfig.slippage); // SHORT entry
+
+                const newTrade = {
+                  id: `${entry.symbol}-antivitalik-short-${Date.now()}`,
+                  symbol: entry.symbol,
+                  mode: 'antivitalik' as const,
+                  side: 'short' as const,
+                  status: 'open' as const,
+                  entryPrice,
+                  entryTime: Date.now(),
+                  entryScore: 0,
+                  entryConsensus: 'ANTIVITALIK',
+                  stopLoss: entryPrice * 2, // SL fake muy alto (no se usa, gestion compuesta)
+                  takeProfit: entryPrice * 0.01, // TP fake muy bajo (no se usa, gestion compuesta)
+                  positionSize: balasNotional,
+                  marginUsed: balasMarginTotal,
+                  leverage: ANTIVITALIK_CONFIG.leverage,
+                  riskAmount: balasMarginTotal,
+                  snapshot: {
+                    rsi: result.indicators.rsi,
+                    fearGreed: result.context.fearGreed,
+                    priceChange24h: result.priceChange24h,
+                  },
+                };
+                paperTrades.push(newTrade);
+                paperEvents.push({
+                  action: 'antivitalik_add',
+                  symbol: entry.symbol,
+                  balas: addDecision.balas,
+                  reason: addDecision.reason,
+                  pnlPctLeveraged: compound.pnlPctLeveraged,
+                });
+                scanReport.push({
+                  symbol: entry.symbol,
+                  mode,
+                  status: 'antivitalik_add',
+                  balas: addDecision.balas,
+                  pnlPct: compound.pnlPctLeveraged,
+                });
+              } else {
+                scanReport.push({
+                  symbol: entry.symbol,
+                  mode,
+                  status: 'antivitalik_hold',
+                  reason: addDecision.reason,
+                  pnlPct: compound.pnlPctLeveraged,
+                });
+              }
+            }
+          } else {
+            // No hay trades abiertos: chequear si abrir nueva serie
+            const setup = detectAntivitalikSetup(entry.symbol, klinesTrigger); // klines4h = trigger en antivitalik
+            if (setup.valid) {
+              const balaSize = calculateBalaSize(paperAccount.balance);
+              const balasMarginTotal = balaSize * ANTIVITALIK_CONFIG.initialBalas;
+              const balasNotional = balasMarginTotal * ANTIVITALIK_CONFIG.leverage;
+              const entryPrice = result.price * (1 - paperConfig.slippage);
+
+              const newTrade = {
+                id: `${entry.symbol}-antivitalik-short-${Date.now()}`,
+                symbol: entry.symbol,
+                mode: 'antivitalik' as const,
+                side: 'short' as const,
+                status: 'open' as const,
+                entryPrice,
+                entryTime: Date.now(),
+                entryScore: 0,
+                entryConsensus: 'ANTIVITALIK',
+                stopLoss: entryPrice * 2,
+                takeProfit: entryPrice * 0.01,
+                positionSize: balasNotional,
+                marginUsed: balasMarginTotal,
+                leverage: ANTIVITALIK_CONFIG.leverage,
+                riskAmount: balasMarginTotal,
+                snapshot: {
+                  rsi: result.indicators.rsi,
+                  fearGreed: result.context.fearGreed,
+                  priceChange24h: result.priceChange24h,
+                },
+              };
+              paperTrades.push(newTrade);
+              paperEvents.push({
+                action: 'antivitalik_open',
+                symbol: entry.symbol,
+                balas: ANTIVITALIK_CONFIG.initialBalas,
+                entryPrice,
+              });
+              scanReport.push({
+                symbol: entry.symbol,
+                mode,
+                status: 'antivitalik_opened',
+                reason: setup.reason,
+              });
+            } else {
+              scanReport.push({
+                symbol: entry.symbol,
+                mode,
+                status: 'antivitalik_no_setup',
+                reason: setup.reason,
+              });
+            }
+          }
+
+          // Saltar el resto del loop (no usar logica normal de paper trader para este modo)
+          continue;
+        }
+
+        // ─── PAPER TRADER: cerrar posiciones abiertas si tocan SL/TP ───
         // ─── PAPER TRADER: cerrar posiciones abiertas si tocan SL/TP ───
         const tradesForSymbol = paperTrades.filter(t =>
           t.status === 'open' && t.symbol === entry.symbol && t.mode === mode
