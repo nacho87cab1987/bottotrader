@@ -116,7 +116,7 @@ export async function GET(req: NextRequest) {
             if (closeCheck.close) {
               // Cerrar TODOS los trades antivitalik abiertos de este par
               for (const trade of openForPair) {
-                const closed = closePaperTrade(trade, result.price, closeCheck.reason, paperConfig);
+                const closed = closePaperTrade(trade, result.price, closeCheck.reason!, paperConfig);
                 const idx = paperTrades.findIndex(t => t.id === trade.id);
                 if (idx !== -1) paperTrades[idx] = closed;
                 paperAccount = updateAccountAfterClose(paperAccount, closed);
