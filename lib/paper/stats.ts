@@ -30,9 +30,22 @@ export function calculateStats(trades: PaperTrade[]): PaperStats {
   const total = closed.length;
 
   const emptyResult: PaperStats = {
-    total: 0, wins: 0, losses: 0, winRate: 0, totalPnl: 0, totalFees: 0,
-    avgWin: 0, avgLoss: 0, profitFactor: 0, largestWin: 0, largestLoss: 0, avgHoldHours: 0,
-    bySide: { long: { count: 0, pnl: 0, winRate: 0 }, short: { count: 0, pnl: 0, winRate: 0 } },
+    total: 0,
+    wins: 0,
+    losses: 0,
+    winRate: 0,
+    totalPnl: 0,
+    totalFees: 0,
+    avgWin: 0,
+    avgLoss: 0,
+    profitFactor: 0,
+    largestWin: 0,
+    largestLoss: 0,
+    avgHoldHours: 0,
+    bySide: {
+      long: { count: 0, pnl: 0, winRate: 0 },
+      short: { count: 0, pnl: 0, winRate: 0 },
+    },
     byMode: {
       swing: { count: 0, pnl: 0, winRate: 0 },
       intraday: { count: 0, pnl: 0, winRate: 0 },
@@ -73,14 +86,28 @@ export function calculateStats(trades: PaperTrade[]): PaperStats {
   });
 
   return {
-    total, wins: wins.length, losses: losses.length, winRate, totalPnl, totalFees,
-    avgWin, avgLoss, profitFactor, largestWin, largestLoss, avgHoldHours,
-    bySide: { long: calcGroup(longs), short: calcGroup(shorts) },
+    total,
+    wins: wins.length,
+    losses: losses.length,
+    winRate,
+    totalPnl,
+    totalFees,
+    avgWin,
+    avgLoss,
+    profitFactor,
+    largestWin,
+    largestLoss,
+    avgHoldHours,
+    bySide: {
+      long: calcGroup(longs),
+      short: calcGroup(shorts),
+    },
     byMode: {
       swing: calcGroup(swings),
       intraday: calcGroup(intradays),
       antivitalik: calcGroup(antivitaliks),
     },
+  };
 }
 
 export function filterByMode(trades: PaperTrade[], mode: AnalysisMode): PaperTrade[] {
