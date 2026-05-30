@@ -21,6 +21,10 @@ import {
   decideAddBalas, shouldCloseCompound, getLastAddTime,
   ANTIVITALIK_CONFIG,
 } from '@/lib/paper/antivitalik';
+import {
+  notifyPaperOpen, notifyPaperClose,
+  notifyAntivitalikAdd, notifyAntivitalikClose,
+} from '@/lib/paperNotify';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -113,13 +117,18 @@ export async function GET(req: NextRequest) {
             const compound = calculateCompoundPnl(paperTrades, result.price);
             const closeCheck = shouldCloseCompound(compound.pnlPctLeveraged);
 
-            if (closeCheck.close) {
+           if (closeCheck.close) {
               // Cerrar TODOS los trades antivitalik abiertos de este par
+              const balanceBeforeClose = paperAccount.balance;
+              let totalPnlClose = 0;
+              const totalBalasClosed = openForPair.length;
+
               for (const trade of openForPair) {
                 const closed = closePaperTrade(trade, result.price, closeCheck.reason!, paperConfig);
                 const idx = paperTrades.findIndex(t => t.id === trade.id);
                 if (idx !== -1) paperTrades[idx] = closed;
                 paperAccount = updateAccountAfterClose(paperAccount, closed);
+                totalPnlClose += (closed.pnl || 0);
                 paperEvents.push({
                   action: 'closed_antivitalik',
                   symbol: trade.symbol,
@@ -128,6 +137,15 @@ export async function GET(req: NextRequest) {
                   pnlPctLeveraged: compound.pnlPctLeveraged,
                 });
               }
+              await notifyAntivitalikClose({
+                symbol: entry.symbol,
+                totalPnl: totalPnlClose,
+                pnlPctLeveraged: compound.pnlPctLeveraged,
+                totalBalas: totalBalasClosed,
+                reason: closeCheck.reason!,
+                balanceBefore: balanceBeforeClose,
+                balanceAfter: paperAccount.balance,
+              });
               scanReport.push({
                 symbol: entry.symbol,
                 mode,
@@ -177,6 +195,19 @@ export async function GET(req: NextRequest) {
                   balas: addDecision.balas,
                   reason: addDecision.reason,
                   pnlPctLeveraged: compound.pnlPctLeveraged,
+                });
+                // Notif: calcular total de balas y margen luego del add
+                const allAntivitalikForPair = paperTrades.filter(t =>
+                  t.mode === 'antivitalik' && t.symbol === entry.symbol && t.status === 'open'
+                );
+                const totalMarginForPair = allAntivitalikForPair.reduce((s, t) => s + t.marginUsed, 0);
+                await notifyAntivitalikAdd({
+                  symbol: entry.symbol,
+                  balasAdded: addDecision.balas,
+                  totalBalas: allAntivitalikForPair.length,
+                  totalMargin: totalMarginForPair,
+                  pnlPctLeveraged: compound.pnlPctLeveraged,
+                  currentPrice: result.price,
                 });
                 scanReport.push({
                   symbol: entry.symbol,
@@ -233,6 +264,7 @@ export async function GET(req: NextRequest) {
                 balas: ANTIVITALIK_CONFIG.initialBalas,
                 entryPrice,
               });
+              await notifyPaperOpen(newTrade, paperAccount.balance);
               scanReport.push({
                 symbol: entry.symbol,
                 mode,
@@ -261,6 +293,7 @@ export async function GET(req: NextRequest) {
         for (const trade of tradesForSymbol) {
           const evalResult = evaluateOpenTrade(trade, result.price, paperConfig);
           if (evalResult?.close) {
+            const balanceBefore = paperAccount.balance;
             const closed = closePaperTrade(trade, evalResult.exitPrice, evalResult.reason, paperConfig);
             const idx = paperTrades.findIndex(t => t.id === trade.id);
             if (idx !== -1) paperTrades[idx] = closed;
@@ -273,6 +306,7 @@ export async function GET(req: NextRequest) {
               reason: evalResult.reason,
               pnl: closed.pnl,
             });
+            await notifyPaperClose(closed, balanceBefore, paperAccount.balance);
           }
         }
 
@@ -292,6 +326,7 @@ export async function GET(req: NextRequest) {
               target: newTrade.takeProfit,
               size: newTrade.positionSize,
             });
+            await notifyPaperOpen(newTrade, paperAccount.balance);
           }
         }
 
@@ -330,6 +365,16 @@ export async function GET(req: NextRequest) {
           scanReport.push({ symbol: entry.symbol, mode, status: 'no-channels' });
           continue;
         }
+         // Solo alertar consensos A+ (filtro de calidad alta)
+        if (result.consensus.level !== 'A+') {
+          scanReport.push({
+            symbol: entry.symbol,
+            mode,
+            status: 'below-consensus',
+            consensus: result.consensus.level,
+          });
+          continue;
+        }
 
         const cooldownMin = COOLDOWN_BY_MODE[mode];
         const cooldownMs = cooldownMin * 60 * 1000;
@@ -362,14 +407,15 @@ export async function GET(req: NextRequest) {
           } as AlertHistoryEntry);
         }
 
+        // ─── ALERTAS DE SEÑAL DESACTIVADAS ───
+        // Ahora solo notificamos acciones del paper trader (en notifyPaper*)
         scanReport.push({
           symbol: entry.symbol,
           mode,
-          status: 'alerted',
+          status: 'scanned',
+          consensus: result.consensus.level,
           verdict,
           score,
-          consensus: result.consensus.level,
-          channels: successChannels,
         });
       } catch (e: any) {
         scanReport.push({ symbol: entry.symbol, mode, status: 'error', error: e.message });
